@@ -55,7 +55,7 @@ set.seed(42)
 ### Download data
 
 Download the csv files in the data folder. If there is no *data* folder yet, it
-will be created. The data will only be loaded once.
+will be created. The data will only be downloaded once.
 
 ```{r}
 # Create folder
@@ -84,7 +84,7 @@ In the next step the csv files will be imported
 
 ```{r}
 data.training <- read.table("data\\training.csv", sep=",", header = TRUE)
-data.coursera  <- read.table("data\\testing.csv",  sep=",", header = TRUE)
+data.coursera <- read.table("data\\testing.csv",  sep=",", header = TRUE)
 
 dim(data.training)
 dim(data.coursera)
@@ -96,19 +96,136 @@ variables. The test data set contains only `r nrow(data.coursera)` observations 
 
 ### Clean data 
 
+In this section all useless variables will be filtered out. At first some general information
+like timestamps or simple row numbers because these variables won't contribute to the classification.
 
+```{r, echo = FALSE}
+for(i in 1:6) print(colnames(data.training)[c(1,3,4,5,6,7)][i])
+```
+
+```{r}
 data.training <- data.training[,-c(1,3,4,5,6,7)]
-#data.coursera <- data.coursera[,-c(1,3,4,5,6,7)]
+```
 
-sum(colSums(is.na(data.training)) == 0)
+Next, I want to eliminate variables which contain missing values. Out of the remaining `r ncol(data.training)` variables, `r sum(colSums(is.na(data.training)) == 0)` contain missing values. It is allowed drop these features because imputation is not recommended (19216 values missing out of 19622).
 
-
-#tmp <- apply(data.training, 2, function(x) length(which(is.na(x))))
+```{r}
 data.training <- data.training[, colSums(is.na(data.training)) == 0] 
+```
 
+In the next step I only want to drop near zero variance predictors. These predictors only have one unique value or have both of the following characteristics:
+
+- they have very few unique values relative to the number of samples
+- the ratio of the frequency of the most common value is large
+
+This is true for:
+```{r}
 nzv <- nearZeroVar(data.training, saveMetrics = TRUE)
 nzv[nzv$nzv == TRUE, ]
+```
 
+```{r}
 nzv <- nearZeroVar(data.training)
 data.training <- data.training[, -nzv]
-dim(data.training)
+```
+
+After dropping near zero variance predictors there are `r nrow(data.training)` observations and `r ncol(data.training)` variables left.
+
+
+### Split data 
+
+Now it is time to split the available data in a training (70%) and a testing (30%) partition. The training set will be used to train the model an the testing set is for validating the model on new data. It is very important to use new data for the validation in order to recieve unbiased performance results.
+
+```{r}
+inTrain <- createDataPartition(y=data.training$classe, p=0.7, list=FALSE)
+data.testing <-  data.training[-inTrain,]
+data.training <- data.training[inTrain,]
+```
+
+### Build Model 
+
+For predicting the different activities I used a **Random Forest Algorithm**. The great benefit of the random forest is the integrated variable selection and its high accuracy. The difficult interpretation is bearable because I'm not interested in the specific effect of the different variables.
+In order to prevent the model from overfitting I used an **5 fold Cross Validation** in the model tuning process. For runtime issues I set the **number of trees** to 50. With higher numbers you can improve the prediction (for example ntree = 250).
+
+```{r}
+fitControl <- trainControl(
+  method = "cv",
+  number = 5)
+  
+fitMod <- train(classe ~ ., 
+                method = "rf", 
+                trainControl = fitControl, 
+                data = data.training, 
+                ntree = 50)
+
+fitMod
+```
+
+### Evaluate Model
+
+After building the model I want to know its performance. Therefore I use the testing data set I put aside earlier.
+
+```{r}
+evalMod <- predict(fitMod, newdata = data.testing)
+confusionMatrix(data.testing$classe, evalMod)
+```
+
+The confusion Matrix seems pretty good. Only few observations were predicted into the wrong class. Also the accuracy with `r postResample(evalMod, data.testing$classe)[1]` is pretty high.
+
+```{r}
+accuracy <- postResample(evalMod, data.testing$classe)
+accuracy
+```
+
+The expected out of sample error is calculated via 1 minus the accuracy.
+
+```{r}
+eoo.sampleerror <- 1 - as.numeric(accuracy[1])
+eoo.sampleerror
+```
+
+
+
+# Prediction of the 20 test cases
+-----
+
+Last but not least I still have to predict the 20 test cases. 
+
+```{r}
+pred.coursera <- predict(fitMod, newdata = data.coursera)
+pred.coursera
+```
+
+And write my predictions to txt-files.
+
+```{r}
+if(!file.exists(file.path(wd,"submission"))){
+  dir.create(file.path(wd,"submission"))
+}
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("submission\\problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(pred.coursera)
+```
+
+
+# Appendix
+-----
+
+### Variable Importance
+
+```{r}
+plot(varImp(fitMod))
+```
+
+### Selected Predictors vs Accuracy
+
+```{r}
+plot.train(fitMod)
+```
